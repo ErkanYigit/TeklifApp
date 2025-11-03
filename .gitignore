@@ -1,0 +1,41 @@
+# ---- Genel ----
+.DS_Store
+Thumbs.db
+
+# IDE / Editör
+.vscode/
+.idea/
+**/.history/
+
+# Dotenv
+.env
+.env.*
+
+# ---- .NET / C# ----
+**/bin/
+**/obj/
+**/.vs/
+*.user
+*.suo
+*.userprefs
+*.csproj.user
+
+# Build çıktıları ve geçici dosyalar
+*.pdb
+*.mdb
+*.log
+
+# EF Core
+# Migrations klasörünü takipte tutmak istediğimiz için özel kural yok
+
+# ---- Angular / Node ----
+teklif-app/node_modules/
+teklif-app/dist/
+teklif-app/.angular/cache/
+teklif-app/npm-debug.log*
+teklif-app/*.log
+
+# Lock dosyaları (takipte kalsın)
+# teklif-app/package-lock.json
+
+

@@ -22,7 +22,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateIssuerSigningKey = true,
             ValidIssuer = cfg["Jwt:Issuer"],
             ValidAudience = cfg["Jwt:Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(cfg["Jwt:Key"]))
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(cfg["Jwt:Key"])),
+            ClockSkew = TimeSpan.FromMinutes(2) // küçük saat farklarında 401 olmasın
         };
     });
 

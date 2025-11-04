@@ -66,7 +66,8 @@ public static class CariEndpoints
             var c = await db.Set<Cari>().FindAsync(id); if (c is null) return Results.NotFound();
             var uid = GetUserId(ctx);
             var isAdmin = IsAdmin(ctx);
-            if (!isAdmin && (c.CreatedByUserId.HasValue && c.CreatedByUserId.Value != uid))
+            // Admin değilse, yalnızca kendi oluşturduğu kaydı güncelleyebilir. Sahibi yoksa (null) da izin verme.
+            if (!isAdmin && (c.CreatedByUserId.GetValueOrDefault() != uid))
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
             if (string.IsNullOrWhiteSpace(req.Ad)) return Results.BadRequest(new { error = "Ad zorunlu" });
             if (string.IsNullOrWhiteSpace(req.VergiNo)) return Results.BadRequest(new { error = "Vergi no zorunlu" });
@@ -93,7 +94,8 @@ public static class CariEndpoints
             var c = await db.Set<Cari>().FindAsync(id); if (c is null) return Results.NotFound();
             var uid = GetUserId(ctx);
             var isAdmin = IsAdmin(ctx);
-            if (!isAdmin && (c.CreatedByUserId.HasValue && c.CreatedByUserId.Value != uid))
+            // Admin değilse, yalnızca kendi oluşturduğu kaydı silebilir. Sahibi yoksa (null) da izin verme.
+            if (!isAdmin && (c.CreatedByUserId.GetValueOrDefault() != uid))
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
             var hasTeklif = await db.Set<Teklif>().AnyAsync(t => t.CariId == id);
             if (hasTeklif) return Results.Conflict(new { error = "Cari bağlı teklifler olduğu için silinemez" });

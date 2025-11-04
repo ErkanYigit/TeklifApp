@@ -43,7 +43,9 @@ public static class AuthEndpoints
 
             var jwt = new JwtService(cfg);
             var (token, expiresAt) = jwt.CreateToken(user);
-            var refresh = new RefreshToken { Token = JwtService.GenerateRefreshToken(), Expires = DateTime.UtcNow.AddDays(int.Parse(cfg["Jwt:RefreshTokenDays"]!)), UserId = user.Id };
+            var daysStr = cfg["Jwt:RefreshTokenDays"]; int days;
+            if (!int.TryParse(daysStr, out days) || days <= 0) days = 30; // varsayılan 30 gün
+            var refresh = new RefreshToken { Token = JwtService.GenerateRefreshToken(), Expires = DateTime.UtcNow.AddDays(days), UserId = user.Id };
             db.RefreshTokens.Add(refresh);
             await db.SaveChangesAsync();
 
@@ -131,9 +133,8 @@ public static class AuthEndpoints
 
     private static int? GetUserId(HttpContext ctx)
     {
-        var sub = ctx.User?.Claims?.FirstOrDefault(c => c.Type == "sub")?.Value;
-        if (int.TryParse(sub, out var id)) return id;
-        return null;
+        var sub = ctx.User?.Claims?.FirstOrDefault(c => c.Type == System.Security.Claims.ClaimTypes.NameIdentifier || c.Type == System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value;
+        return int.TryParse(sub, out var id) ? id : null;
     }
 }
 

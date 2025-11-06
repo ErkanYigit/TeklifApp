@@ -1,0 +1,774 @@
+ # .NET 8 + EF Core Minimal API ve Angular + DevExtreme Eğitim Notları (Proje Rehberi)
+
+ Bu eğitim dosyası, projede kullandığımız backend (.NET 8, EF Core, Minimal API) ve frontend (Angular + DevExtreme) mimarisini adım adım, örnek kodlarla anlatır. Amaç, bir junior geliştiricinin bu metni okuyarak mimariyi öğrenmesi ve projeyi sıfırdan inşa edebilmesidir.
+
+
+ ## 1) Genel Mimari Tanıtım
+
+ - **Katmanlar**: Domain, Application, Infrastructure, Api, ClientApp (Angular)
+ - **Yaklaşım**: Clean Architecture
+ - **Temel İlke**: Bağımlılıklar içeri doğru (Domain) akar; en iç katman en az bağımlılığa sahiptir.
+
+ - **Bağımlılık akışı**:
+   - Api → Application → Domain
+   - Infrastructure hem Application’a servis sağlar (ör: `AppDbContext`), hem de dış dünya ile konuşur (DB, dosya, e-posta, mesaj kuyrukları vb.).
+   - ClientApp (Angular) sadece Api ile HTTP üzerinden konuşur.
+
+ - **DTO (Contract) vs Entity**:
+   - Entity: Domain’in saf veri modeli ve ilişkileri. DB’ye yansır.
+   - DTO/Contract: Dış dünyaya açılan sözleşme; endpoint giriş/çıkışlarında kullanılır. Entity yerine DTO döneriz.
+   - Neden? Versiyonlama, güvenlik, veri gizleme, dış bağımlılığı azaltma.
+
+ ```csharp
+ // DTO ile Entity ayrımı örneği
+ public record CariDto(Guid Id, string Kod, string Unvan);
+
+ public class Cari // Domain Entity
+ {
+     public Guid Id { get; set; }
+     public string Kod { get; set; } = string.Empty;
+     public string Unvan { get; set; } = string.Empty;
+     public ICollection<CariAdres> Adresler { get; set; } = new List<CariAdres>();
+ }
+
+ // Açıklama:
+ // DTO, dış dünyaya sunacağımız alanlar ile sınırlıdır.
+ // Entity, iş kurallarımızın ve ilişkilerimizin gerçek modelidir.
+ ```
+
+
+ ## 2) Domain Katmanı
+
+ - **Görev**: Veri modelinin ve iş kurallarının saf tanımı.
+ - **Örnek Entity’ler**: User, Cari, CariAdres, Stok, StokFiyat, Teklif, TeklifKalem, TeklifSepet, Tedarikci, TedarikciFiyat, AuditLog
+ - **İlişki Modelleri**:
+   - One-to-Many: `Cari` → `CariAdres`, `Teklif` → `TeklifKalem`
+   - Many-to-One: `StokFiyat` → `Stok`, `TedarikciFiyat` → `Tedarikci`
+   - ForeignKey alanları ile açıkça yönetilir.
+
+ - **Neden decimal(18,2)?**
+   - Finansal verilerde kesirli, hassas değerler gerekir.
+   - `double/float` yerine `decimal` ile yuvarlama ve precision hataları minimize edilir.
+
+ ```csharp
+ public class Stok
+ {
+     public Guid Id { get; set; }
+     public string Kod { get; set; } = string.Empty;
+     public string Ad { get; set; } = string.Empty;
+     public ICollection<StokFiyat> Fiyatlar { get; set; } = new List<StokFiyat>();
+ }
+
+ public class StokFiyat
+ {
+     public Guid Id { get; set; }
+     public Guid StokId { get; set; }
+     public Stok Stok { get; set; } = null!;
+
+     public Guid? TedarikciId { get; set; }
+     public Tedarikci? Tedarikci { get; set; }
+
+     public decimal BirimFiyat { get; set; } // decimal(18,2)
+     public DateTime GecerlilikTarihi { get; set; }
+ }
+
+ public class Teklif
+ {
+     public Guid Id { get; set; }
+     public string No { get; set; } = string.Empty;
+     public Guid CariId { get; set; }
+     public Cari Cari { get; set; } = null!;
+     public ICollection<TeklifKalem> Kalemler { get; set; } = new List<TeklifKalem>();
+     public decimal ToplamTutar { get; set; }
+ }
+
+ public class TeklifKalem
+ {
+     public Guid Id { get; set; }
+     public Guid TeklifId { get; set; }
+     public Teklif Teklif { get; set; } = null!;
+
+     public Guid StokId { get; set; }
+     public Stok Stok { get; set; } = null!;
+
+     public decimal Miktar { get; set; }
+     public decimal BirimFiyat { get; set; }
+     public decimal SatirTutar { get; set; }
+ }
+
+ // Açıklama:
+ // Finansal alanlar decimal ile tutulur. İlişkiler navigation propery + FK ile açık.
+ ```
+
+
+ ## 3) Application Katmanı
+
+ - **Görev**: Domain iş kurallarını “işleyen” servisler. Use-case mantığı.
+ - **Örnek Servisler**:
+   - TeklifHesap → Teklif toplamlarını hesaplama
+   - NoUretici → Otomatik teklif numarası üretimi
+   - Audit → Veri değişikliklerinde geçmiş kayıt tutma
+   - Stats → Fiyat analizinde medyan/ortalama hesaplama
+
+ - **Domain ile çalışma**: Servisler, Domain entity’leri üzerinde işlem yapar, gerekli durumlarda Infrastructure’dan (ör: DbContext) veri çeker.
+
+ ```csharp
+ public interface ITeklifHesapService
+ {
+     void Hesapla(Teklif teklif);
+ }
+
+ public class TeklifHesapService : ITeklifHesapService
+ {
+     public void Hesapla(Teklif teklif)
+     {
+         // Satır tutarı = Miktar * BirimFiyat
+         foreach (var kalem in teklif.Kalemler)
+         {
+             kalem.SatirTutar = decimal.Round(kalem.Miktar * kalem.BirimFiyat, 2);
+         }
+
+         teklif.ToplamTutar = decimal.Round(teklif.Kalemler.Sum(k => k.SatirTutar), 2);
+         // Bu kısım domain kuralını uygular ve toplamı hesaplar.
+     }
+ }
+
+ public interface INoUretici
+ {
+     string YeniTeklifNo();
+ }
+
+ public class NoUretici : INoUretici
+ {
+     public string YeniTeklifNo()
+     {
+         // Örn: YIL-00001234 formatı
+         var yil = DateTime.UtcNow.Year;
+         var sayi = Random.Shared.Next(1, 9999999);
+         return $"{yil}-{sayi:D7}";
+     }
+ }
+
+ public interface IStatsService
+ {
+     decimal Ortalama(IEnumerable<decimal> sayilar);
+     decimal Medyan(IEnumerable<decimal> sayilar);
+ }
+
+ public class StatsService : IStatsService
+ {
+     public decimal Ortalama(IEnumerable<decimal> sayilar)
+         => sayilar.Any() ? decimal.Round(sayilar.Average(), 2) : 0;
+
+     public decimal Medyan(IEnumerable<decimal> sayilar)
+     {
+         var list = sayilar.OrderBy(x => x).ToList();
+         if (list.Count == 0) return 0;
+         var mid = list.Count / 2;
+         return list.Count % 2 == 1
+             ? list[mid]
+             : decimal.Round((list[mid - 1] + list[mid]) / 2, 2);
+     }
+ }
+ ```
+
+
+ ## 4) Infrastructure Katmanı
+
+ - **Görev**: Veri erişimi, database, migration ve sistem servisleri (dosya, e-posta, cache vb.).
+ - **AppDbContext**: EF Core konfigürasyonu, OnModelCreating, precision/index/ilişki ayarları.
+ - **Migration Süreci**: `dotnet ef migrations add Init` → değişiklikleri migration’a yazar. `dotnet ef database update` → DB’ye uygular.
+ - **Precision ve Index**: Finansal tablolar için `HasPrecision(18,2)`. Sık aranan alanlara index.
+ - **Seed ve Transaction**: Örnek başlangıç verileri ve çok-adımlı işlemlerde transaction.
+ - **AuditLog**: Değişiklikleri JSON olarak kaydetme. Çoğunlukla transaction içinde, iki aşamalı `SaveChangesAsync`.
+
+ ```csharp
+ public class AppDbContext : DbContext
+ {
+     public DbSet<User> Users => Set<User>();
+     public DbSet<Cari> Cariler => Set<Cari>();
+     public DbSet<CariAdres> CariAdresler => Set<CariAdres>();
+     public DbSet<Stok> Stoklar => Set<Stok>();
+     public DbSet<StokFiyat> StokFiyatlar => Set<StokFiyat>();
+     public DbSet<Teklif> Teklifler => Set<Teklif>();
+     public DbSet<TeklifKalem> TeklifKalemler => Set<TeklifKalem>();
+     public DbSet<Tedarikci> Tedarikciler => Set<Tedarikci>();
+     public DbSet<TedarikciFiyat> TedarikciFiyatlar => Set<TedarikciFiyat>();
+     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+
+     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
+     {
+     }
+
+     protected override void OnModelCreating(ModelBuilder modelBuilder)
+     {
+         // Precision örneği
+         modelBuilder.Entity<StokFiyat>()
+             .Property(p => p.BirimFiyat)
+             .HasPrecision(18, 2);
+
+         modelBuilder.Entity<TeklifKalem>()
+             .Property(p => p.Miktar)
+             .HasPrecision(18, 3);
+
+         modelBuilder.Entity<TeklifKalem>()
+             .Property(p => p.BirimFiyat)
+             .HasPrecision(18, 2);
+
+         modelBuilder.Entity<Teklif>()
+             .Property(p => p.ToplamTutar)
+             .HasPrecision(18, 2);
+
+         // Index örnekleri
+         modelBuilder.Entity<Cari>()
+             .HasIndex(p => p.Kod)
+             .IsUnique();
+
+         modelBuilder.Entity<Stok>()
+             .HasIndex(p => p.Kod)
+             .IsUnique();
+
+         // İlişki örnekleri
+         modelBuilder.Entity<CariAdres>()
+             .HasOne(a => a.Cari)
+             .WithMany(c => c.Adresler)
+             .HasForeignKey(a => a.CariId);
+
+         modelBuilder.Entity<TeklifKalem>()
+             .HasOne(k => k.Teklif)
+             .WithMany(t => t.Kalemler)
+             .HasForeignKey(k => k.TeklifId);
+
+         // Seed (isteğe bağlı)
+         // modelBuilder.Entity<Cari>().HasData(new Cari { Id = Guid.NewGuid(), Kod = "C001", Unvan = "Demo Cari" });
+     }
+ }
+
+ // Migration komutları
+ // dotnet ef migrations add Init --project backend/Infrastructure --startup-project backend/Api
+ // dotnet ef database update --project backend/Infrastructure --startup-project backend/Api
+
+ // Açıklama:
+ // Bu kısım precision ve index atamaları yapar.
+ // Migration'lar Infrastructure katmanında tutulabilir, Api startup projesi kullanılarak yürütülür.
+ ```
+
+ - **AuditLog Ekleme (Transaction içinde iki aşama)**:
+
+ ```csharp
+ // EF transaction örneği (iki aşamalı SaveChanges)
+ using var tr = await db.Database.BeginTransactionAsync();
+ 
+ // 1) İşlemler
+ // ... entity ekle/güncelle/sil
+ await db.SaveChangesAsync();
+ 
+ // 2) Audit kayıtları
+ var audit = new AuditLog
+ {
+     Id = Guid.NewGuid(),
+     UserId = userId,
+     Entity = nameof(Teklif),
+     Action = "INSERT",
+     Data = JsonSerializer.Serialize(teklif), // Değişikliklerin JSON hali
+     CreatedAt = DateTime.UtcNow
+ };
+ 
+ db.AuditLogs.Add(audit);
+ await db.SaveChangesAsync();
+ 
+ await tr.CommitAsync();
+ 
+ // // Bu kısım transaction açar ve hata olursa rollback eder
+ ```
+
+
+ ## 5) Api Katmanı (Minimal API)
+
+ - **Görev**: Dış dünyaya açılan uçlar (endpoint’ler) ve HTTP sözleşmeleri.
+ - **Yapı**: Modül bazlı endpoint dosyaları: `AuthEndpoints`, `CariEndpoints`, `StokEndpoints`, `TeklifEndpoints`, `SepetEndpoints`, `FoyEndpoints`, `KarsilastirmaEndpoints`.
+ - **Kullanılan yöntemler**: `MapGet`, `MapPost`, `MapPut`, `MapDelete`, `RequireAuthorization`, `[AsParameters]`.
+ - **DTO Kullanımı**: Entity yerine Contract döndürür; dış tüketiciler için stabil sözleşme sağlanır.
+ - **Transaction Örneği**: `using var tr = await db.Database.BeginTransactionAsync();`
+
+ ```csharp
+ public static class AuthEndpoints
+ {
+     public static IEndpointRouteBuilder MapAuth(this IEndpointRouteBuilder app)
+     {
+         var group = app.MapGroup("/api/auth");
+ 
+         group.MapPost("/register", async (RegisterRequest req, AppDbContext db) =>
+         {
+             // kullanıcı oluştur
+             var user = new User { Id = Guid.NewGuid(), Email = req.Email };
+             // şifreyi hashle vb.
+             db.Users.Add(user);
+             await db.SaveChangesAsync();
+             return Results.Ok(new { message = "registered" });
+         });
+ 
+         group.MapPost("/login", async (LoginRequest req, AppDbContext db, ITokenService tokens) =>
+         {
+             // kullanıcı doğrulama
+             var user = await db.Users.FirstOrDefaultAsync(x => x.Email == req.Email);
+             if (user is null) return Results.Unauthorized();
+ 
+             var access = tokens.CreateAccessToken(user);
+             var refresh = tokens.CreateRefreshToken(user);
+             return Results.Ok(new LoginResponse(access, refresh));
+         });
+ 
+         group.MapPost("/refresh", (RefreshRequest req, ITokenService tokens) =>
+         {
+             // refresh token doğrulama ve yeni access üretme
+             var access = tokens.RefreshAccessToken(req.RefreshToken);
+             return Results.Ok(new { access });
+         });
+ 
+         group.MapPost("/logout", [Authorize] () => Results.Ok(new { message = "logged out" }));
+ 
+         return app;
+     }
+ }
+ 
+ // Açıklama:
+ // MapGroup ile modül bazlı route'lar. Login, refresh, logout örnekleri.
+ // RequireAuthorization ya da [Authorize] ile erişim kontrolü sağlanır.
+ ```
+
+ - **CariEndpoints (CRUD + Adres)**:
+
+ ```csharp
+ public static class CariEndpoints
+ {
+     public static IEndpointRouteBuilder MapCari(this IEndpointRouteBuilder app)
+     {
+         var group = app.MapGroup("/api/cari").RequireAuthorization();
+ 
+         group.MapGet("/", async (AppDbContext db) =>
+         {
+             var list = await db.Cariler
+                 .OrderBy(x => x.Kod)
+                 .Select(x => new CariDto(x.Id, x.Kod, x.Unvan))
+                 .ToListAsync();
+             return Results.Ok(list);
+         });
+ 
+         group.MapGet("/{id}", async (Guid id, AppDbContext db) =>
+         {
+             var cari = await db.Cariler
+                 .Include(x => x.Adresler)
+                 .FirstOrDefaultAsync(x => x.Id == id);
+             if (cari is null) return Results.NotFound();
+             var dto = new CariDto(cari.Id, cari.Kod, cari.Unvan);
+             return Results.Ok(dto);
+         });
+ 
+         group.MapPost("/", async (CariCreateRequest req, AppDbContext db) =>
+         {
+             var entity = new Cari { Id = Guid.NewGuid(), Kod = req.Kod, Unvan = req.Unvan };
+             db.Cariler.Add(entity);
+             await db.SaveChangesAsync();
+             return Results.Created($"/api/cari/{entity.Id}", new { entity.Id });
+         });
+ 
+         group.MapPut("/{id}", async (Guid id, CariUpdateRequest req, AppDbContext db) =>
+         {
+             var entity = await db.Cariler.FindAsync(id);
+             if (entity is null) return Results.NotFound();
+             entity.Kod = req.Kod;
+             entity.Unvan = req.Unvan;
+             await db.SaveChangesAsync();
+             return Results.NoContent();
+         });
+ 
+         group.MapDelete("/{id}", async (Guid id, AppDbContext db) =>
+         {
+             var entity = await db.Cariler.FindAsync(id);
+             if (entity is null) return Results.NotFound();
+             db.Cariler.Remove(entity);
+             await db.SaveChangesAsync();
+             return Results.NoContent();
+         });
+ 
+         // Adres alt kaynakları
+         group.MapGet("/{id}/adres", async (Guid id, AppDbContext db) =>
+         {
+             var adresler = await db.CariAdresler
+                 .Where(a => a.CariId == id)
+                 .ToListAsync();
+             return Results.Ok(adresler);
+         });
+ 
+         return app;
+     }
+ }
+ 
+ // Açıklama:
+ // Endpoint içinde DTO döneriz. Entity'yi doğrudan dışarı açmayız.
+ ```
+
+ - **TeklifEndpoints (Transaction + Audit örnekli)**:
+
+ ```csharp
+ public static class TeklifEndpoints
+ {
+     public static IEndpointRouteBuilder MapTeklif(this IEndpointRouteBuilder app)
+     {
+         var group = app.MapGroup("/api/teklif").RequireAuthorization();
+ 
+         group.MapPost("/", async (
+             TeklifCreateRequest req,
+             AppDbContext db,
+             ITeklifHesapService hesap,
+             INoUretici noUretici,
+             IUserContext userCtx) =>
+         {
+             using var tr = await db.Database.BeginTransactionAsync();
+ 
+             var teklif = new Teklif
+             {
+                 Id = Guid.NewGuid(),
+                 No = noUretici.YeniTeklifNo(),
+                 CariId = req.CariId
+             };
+ 
+             foreach (var rkalem in req.Kalemler)
+             {
+                 teklif.Kalemler.Add(new TeklifKalem
+                 {
+                     Id = Guid.NewGuid(),
+                     StokId = rkalem.StokId,
+                     Miktar = rkalem.Miktar,
+                     BirimFiyat = rkalem.BirimFiyat
+                 });
+             }
+ 
+             hesap.Hesapla(teklif); // toplamları hesapla
+ 
+             db.Teklifler.Add(teklif);
+             await db.SaveChangesAsync();
+ 
+             // Audit
+             var audit = new AuditLog
+             {
+                 Id = Guid.NewGuid(),
+                 UserId = userCtx.UserId,
+                 Entity = nameof(Teklif),
+                 Action = "INSERT",
+                 Data = JsonSerializer.Serialize(new { teklif.Id, teklif.No, Kalem = teklif.Kalemler.Count }),
+                 CreatedAt = DateTime.UtcNow
+             };
+             db.AuditLogs.Add(audit);
+             await db.SaveChangesAsync();
+ 
+             await tr.CommitAsync();
+ 
+             return Results.Created($"/api/teklif/{teklif.Id}", new { teklif.Id, teklif.No, teklif.ToplamTutar });
+         });
+ 
+         return app;
+     }
+ }
+ 
+ // Açıklama:
+ // Bu kısım transaction açar ve hata olursa rollback eder.
+ // İki aşamalı save ile hem asıl veri hem de audit log yazılır.
+ ```
+
+ - **StokEndpoints, SepetEndpoints, FoyEndpoints, KarsilastirmaEndpoints** benzer yapıdadır:
+   - Stok: CRUD + fiyat yönetimi + gerekirse UDF/TVF ile fiyat hesapları
+   - Sepet: Kullanıcı bazlı sepet yönetimi, “teklife dönüştür” akışı
+   - Foy: Filtreli teklif listesi, CSV/Excel export için uygun DTO
+   - Karşılaştırma: Stok/Tedarikçi bazlı fiyat analizi, `StatsService` ile özetler
+
+
+ ## 6) Frontend – Angular Katmanı
+
+ - **Yapı**:
+   - `core/` → servisler, interceptor, guard
+   - `shared/` → ortak bileşenler (grid, form, pipe)
+   - `features/` → modül bazlı sayfalar (auth, cari, stok, teklif, sepet, foy, karsilastirma)
+
+ - **Örnek Routing**:
+
+ ```ts
+ // app-routing.module.ts
+ const routes: Routes = [
+   { path: 'auth', loadChildren: () => import('./features/auth/auth.module').then(m => m.AuthModule) },
+   { path: 'cari', canActivate: [AuthGuard], loadChildren: () => import('./features/cari/cari.module').then(m => m.CariModule) },
+   { path: 'stok', canActivate: [AuthGuard], loadChildren: () => import('./features/stok/stok.module').then(m => m.StokModule) },
+   { path: 'teklif', canActivate: [AuthGuard], loadChildren: () => import('./features/teklif/teklif.module').then(m => m.TeklifModule) },
+   { path: '', redirectTo: 'cari', pathMatch: 'full' },
+ ];
+ ```
+
+ - **Service (HttpClient + environment.apiBase)**:
+
+ ```ts
+ @Injectable({ providedIn: 'root' })
+ export class CariService {
+   private base = environment.apiBase + '/cari';
+ 
+   constructor(private http: HttpClient) {}
+ 
+   list() {
+     return this.http.get<CariDto[]>(this.base);
+   }
+ 
+   create(req: CariCreateRequest) {
+     return this.http.post<{ id: string }>(this.base, req);
+   }
+ }
+ ```
+
+ - **HttpInterceptor ile Token Ekleme**:
+
+ ```ts
+ @Injectable()
+ export class AuthInterceptor implements HttpInterceptor {
+   intercept(req: HttpRequest<any>, next: HttpHandler): Observable<HttpEvent<any>> {
+     const token = localStorage.getItem('access');
+     if (token) {
+       const cloned = req.clone({ setHeaders: { Authorization: `Bearer ${token}` } });
+       return next.handle(cloned);
+     }
+     return next.handle(req);
+   }
+ }
+ 
+ // Açıklama:
+ // Her isteğe Bearer token ekler. 401 gelirse refresh akışı tetiklenebilir.
+ ```
+
+ - **AuthGuard (Route-level erişim kontrolü)**:
+
+ ```ts
+ @Injectable({ providedIn: 'root' })
+ export class AuthGuard implements CanActivate {
+   constructor(private router: Router) {}
+   canActivate(): boolean {
+     const hasToken = !!localStorage.getItem('access');
+     if (!hasToken) {
+       this.router.navigateByUrl('/auth/login');
+       return false;
+     }
+     return true;
+   }
+ }
+ ```
+
+ - **DevExtreme Grid (Server-side pagination, search, sort)**:
+
+ ```ts
+ <dx-data-grid
+   [dataSource]="dataSource"
+   [remoteOperations]="true"
+   [showBorders]="true">
+   <dxi-column dataField="kod" caption="Kod"></dxi-column>
+   <dxi-column dataField="unvan" caption="Ünvan"></dxi-column>
+   <dxo-paging [pageSize]="20"></dxo-paging>
+   <dxo-filter-row [visible]="true"></dxo-filter-row>
+   <dxo-sorting mode="multiple"></dxo-sorting>
+ </dx-data-grid>
+ ```
+
+ ```ts
+ // dataSource tanımı (OData benzeri query string desteklenebilir)
+ this.dataSource = new CustomStore({
+   key: 'id',
+   load: (loadOptions: any) => {
+     const params = new HttpParams({ fromObject: buildDevExtremeQuery(loadOptions) });
+     return this.http.get<CariDto[]>(this.baseUrl, { params })
+       .pipe(map(data => ({ data, totalCount: getTotalFromHeaderOrApi() })))
+       .toPromise();
+   }
+ });
+ 
+ // Açıklama:
+ // remoteOperations=true ile server-side sort, filter, paging olur.
+ ```
+
+ - **ReactiveForms vs [(ngModel)]**:
+   - ReactiveForms: Dinamik, validasyon ağırlıklı formlar (ör: Teklif Kalem ekleme).
+   - [(ngModel)]: Basit, iki yönlü binding gereken küçük bileşenler.
+
+ - **CSV/Excel Export (Blob indirme)**:
+
+ ```ts
+ this.http.get(this.base + '/export', { responseType: 'blob' })
+   .subscribe(blob => {
+     const url = window.URL.createObjectURL(blob);
+     const a = document.createElement('a');
+     a.href = url;
+     a.download = 'rapor.xlsx';
+     a.click();
+     window.URL.revokeObjectURL(url);
+   });
+ 
+ // Açıklama:
+ // Backend'in Content-Type'ına göre blob alınır, tarayıcıda indirtilir.
+ ```
+
+
+ ## 7) Güvenlik, Transaction ve Audit
+
+ - **JWT Kimlik Doğrulama**:
+   - Login’de access ve refresh token üretilir.
+   - Access token kısa ömürlü; refresh token daha uzun ömürlüdür.
+
+ - **Refresh Token Yapısı**:
+   - `POST /api/auth/refresh` ile geçerli refresh token verilip yeni access alınır.
+
+ - **UserUtil.GetUserId(HttpContext)** mantığı:
+   - HttpContext içindeki JWT claim’lerinden `sub` ya da özelleştirilmiş `userId` alınır.
+
+ ```csharp
+ public static class UserUtil
+ {
+     public static Guid? GetUserId(HttpContext http)
+         => Guid.TryParse(http.User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : null;
+ }
+ ```
+
+ - **Transaction Rollback Örnekleri**:
+   - Transaction içinde hata atarsanız `Commit` çağrılmazsa transaction rollback olur.
+
+ ```csharp
+ using var tr = await db.Database.BeginTransactionAsync();
+ try
+ {
+     // ... değişiklikler
+     await db.SaveChangesAsync();
+ 
+     await tr.CommitAsync();
+ }
+ catch
+ {
+     await tr.RollbackAsync();
+     throw; // üst kata fırlat
+ }
+ 
+ // Açıklama:
+ // Hata durumunda rollback yapar.
+ ```
+
+ - **Audit Log Veri Yapısı, JSON Serialize**:
+
+ ```csharp
+ public class AuditLog
+ {
+     public Guid Id { get; set; }
+     public Guid? UserId { get; set; }
+     public string Entity { get; set; } = string.Empty;
+     public string Action { get; set; } = string.Empty; // INSERT/UPDATE/DELETE
+     public string Data { get; set; } = string.Empty;   // JSON snapshot
+     public DateTime CreatedAt { get; set; }
+ }
+ ```
+
+
+ ## 8) Yayınlama ve CI/CD
+
+ - **Docker Compose (API + DB + Web)**:
+
+ ```yaml
+ version: '3.9'
+ services:
+   api:
+     build: ./backend/Api
+     environment:
+       - ASPNETCORE_ENVIRONMENT=Production
+       - ConnectionStrings__Default=Server=db;Database=teklif;User Id=sa;Password=Your_password123;
+     ports:
+       - "5000:8080"
+     depends_on:
+       - db
+ 
+   db:
+     image: mcr.microsoft.com/mssql/server:2022-latest
+     environment:
+       - ACCEPT_EULA=Y
+       - SA_PASSWORD=Your_password123
+     ports:
+       - "1433:1433"
+ 
+   web:
+     build: ./teklif-app
+     ports:
+       - "4200:80"
+     environment:
+       - API_BASE=http://localhost:5000/api
+     depends_on:
+       - api
+ ```
+
+ - **GitHub Actions (build + Angular prod build)**:
+
+ ```yaml
+ name: CI
+ on:
+   push:
+     branches: [ main ]
+ 
+ jobs:
+   build:
+     runs-on: ubuntu-latest
+     steps:
+       - uses: actions/checkout@v4
+       - name: Setup .NET
+         uses: actions/setup-dotnet@v4
+         with:
+           dotnet-version: '8.0.x'
+       - name: Restore & Build API
+         run: |
+           dotnet restore backend/Api
+           dotnet build backend/Api -c Release --no-restore
+       - name: Setup Node
+         uses: actions/setup-node@v4
+         with:
+           node-version: '20'
+       - name: Install & Build Angular
+         working-directory: teklif-app
+         run: |
+           npm ci
+           npm run build -- --configuration production
+ ```
+
+ - **environment.apiBase ve Ortam Değişkenleri**:
+   - `environment.ts` ve `environment.prod.ts` dosyalarında `apiBase` farklı olabilir.
+   - CI/CD’de `API_BASE` gibi env değişkenleri Nginx config ya da deploy aşamasında enjekte edilir.
+
+ - **Prod vs Dev**:
+   - CORS: Dev’de `http://localhost:4200` izinli; Prod’da domain bazlı sıkı izin.
+   - Connection string: Prod’da gizli yönetilir (Secret Manager, KeyVault).
+
+
+ ## 9) Sonuç & Öğrenme Çıktıları
+
+ - **Öğrenilen Kavramlar**:
+   - Clean Architecture, katmanlı yapı ve bağımlılık akışı
+   - DTO-Entity ayrımı ve dış sözleşme yönetimi
+   - EF Core konfigürasyonu (precision, index, ilişkiler, migration)
+   - Minimal API ile modül bazlı endpoint tasarımı
+   - Transaction ve Audit loglama pratikleri
+   - Angular modüler mimarisi, DevExtreme ile server-side grid
+   - Token tabanlı kimlik doğrulama, interceptor ve guard kullanımı
+   - CI/CD ve Docker ile çoklu servis orkestrasyonu
+
+ - **Avantajlar**:
+   - Ölçeklenebilirlik: Servisler ayrık ve modüler
+   - Sürdürülebilirlik: Katmanlar arası net sınırlar
+   - Test edilebilirlik: Application servisleri izole test edilebilir
+
+ - **İleri Seviye Öneriler**:
+   - CQRS: Okuma ve yazma modellerini ayırarak ölçeklenebilirlik
+   - MediatR: Handler tabanlı use-case orkestrasyonu
+   - UnitOfWork pattern: Transaction kapsamını tek noktada yönetme
+   - NgRx: Angular tarafında global state yönetimi ve etkili caching
+
+ // Kapanış Notu:
+ // Bu rehber, projedeki tüm katmanların neden ve nasılını örneklerle özetler.
+ // Kod örneklerini kendi projenize uyarlarken naming ve domain kurallarına dikkat ediniz.
+

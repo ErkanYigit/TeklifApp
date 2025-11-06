@@ -1,6 +1,7 @@
 using Domain.Entities;
 using Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Api.Utils;
 
 public static class AuthEndpoints
 {
@@ -8,16 +9,30 @@ public static class AuthEndpoints
     {
         app.MapPost("/auth/register", async (RegisterRequest req, AppDbContext db) =>
         {
+            // Telefon numarası zorunlu ve geçerli olmalı (yeni kayıtlar için)
+            if (string.IsNullOrWhiteSpace(req.Phone))
+                return Results.BadRequest(new { error = "Telefon numarası zorunludur" });
+
+            // Telefon numarasını doğrula ve normalize et
+            if (!PhoneValidator.IsValidTurkishPhone(req.Phone, out var normalizedPhone))
+                return Results.BadRequest(new { error = "Geçersiz telefon numarası formatı. Lütfen Türkiye telefon numarası formatında girin (örn: 05XX XXX XX XX)" });
+
+            // Email, kullanıcı kodu ve telefon kontrolü
             if (await db.Users.AnyAsync(x => x.Email == req.Email || x.UserCode == req.UserCode))
                 return Results.BadRequest(new { error = "Email veya kullanıcı kodu zaten kullanılıyor" });
+
+            if (await db.Users.AnyAsync(x => x.Phone == normalizedPhone))
+                return Results.BadRequest(new { error = "Bu telefon numarası zaten kayıtlı" });
+
             try
             {
                 var user = new User
                 {
-                    Email = req.Email,
-                    UserCode = req.UserCode,
-                    UserName = req.UserCode, // UserName unique indexi için doldur
+                    Email = req.Email.Trim(),
+                    UserCode = req.UserCode.Trim(),
+                    UserName = req.UserCode.Trim(), // UserName unique indexi için doldur
                     Password = Password.Hash(req.Password),
+                    Phone = normalizedPhone!,
                     Active = true,
                 };
                 db.Users.Add(user);
@@ -27,7 +42,7 @@ public static class AuthEndpoints
             catch (DbUpdateException ex)
             {
                 // Unique ihlalleri 400 döndür
-                return Results.BadRequest(new { error = "Kullanıcı oluşturulamadı. Email/kod zaten kayıtlı olabilir.", detail = ex.InnerException?.Message ?? ex.Message });
+                return Results.BadRequest(new { error = "Kullanıcı oluşturulamadı. Email/kod/telefon zaten kayıtlı olabilir.", detail = ex.InnerException?.Message ?? ex.Message });
             }
         });
 

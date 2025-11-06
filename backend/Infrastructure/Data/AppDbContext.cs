@@ -27,9 +27,12 @@ public class AppDbContext : DbContext
         
         modelBuilder.Entity<User>().HasIndex(x => x.Email).IsUnique();
         modelBuilder.Entity<User>().HasIndex(x => x.UserName).IsUnique();
+        // Phone için unique index (NULL değerler unique constraint'i ihlal etmez)
+        modelBuilder.Entity<User>().HasIndex(x => x.Phone).IsUnique().HasFilter("[Phone] IS NOT NULL");
         modelBuilder.Entity<RefreshToken>().HasIndex(x => x.Token).IsUnique();
         modelBuilder.Entity<User>().Property(x => x.Role).HasDefaultValue("user");
         modelBuilder.Entity<User>().Property(x => x.Active).HasDefaultValue(true);
+        modelBuilder.Entity<User>().Property(x => x.Phone).HasMaxLength(20);
 
         // Cari
         modelBuilder.Entity<Cari>().HasIndex(x => x.Kod).IsUnique();

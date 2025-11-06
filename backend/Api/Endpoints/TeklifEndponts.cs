@@ -38,9 +38,26 @@ public static class TeklifEndpoints
             using var tr = await db.Database.BeginTransactionAsync();
             var uid = GetUserId(ctx);
             var t = new Teklif { CariId = req.CariId, No = NoUretici.TeklifNo(db), CreatedByUserId = uid };
+
+            if (req.Kalemler is not null && req.Kalemler.Count > 0)
+            {
+                foreach (var k in req.Kalemler)
+                {
+                    t.Kalemler.Add(new TeklifKalem
+                    {
+                        StokId = k.StokId,
+                        Miktar = k.Miktar,
+                        BirimFiyat = k.BirimFiyat,
+                        IskontoOran = k.IskontoOran,
+                        KdvOran = k.KdvOran
+                    });
+                }
+                TeklifHesap.Hesapla(t);
+            }
+
             db.Set<Teklif>().Add(t); 
             await db.SaveChangesAsync();
-            Audit.Log(db, nameof(Teklif), t.Id, "Oluşturuldu", null, t, uid);
+            Audit.Log(db, nameof(Teklif), t.Id, "Oluşturuldu", null, new { t.CariId, KalemSayisi = t.Kalemler.Count, t.GenelToplam }, uid);
             await db.SaveChangesAsync();
             await tr.CommitAsync();
             return Results.Created($"/teklif/{t.Id}", new { t.Id, t.No });
@@ -78,6 +95,63 @@ public static class TeklifEndpoints
             await db.SaveChangesAsync();
             await tr.CommitAsync();
             return Results.NoContent();
+        });
+
+        // Durum geçişleri
+        g.MapPost("/{id:int}/status", async (int id, ChangeStatusRequest req, AppDbContext db, HttpContext ctx) =>
+        {
+            using var tr = await db.Database.BeginTransactionAsync();
+            var t = await db.Set<Teklif>().Include(x => x.Kalemler).FirstOrDefaultAsync(x => x.Id == id);
+            if (t is null) return Results.NotFound();
+
+            var uid = GetUserId(ctx); var isAdmin = IsAdmin(ctx);
+            var current = t.Durum;
+            var next = req.Durum;
+
+            bool Allowed(string from, params string[] to) => current == from && to.Contains(next);
+
+            // Kurallar
+            if (Allowed("Taslak", "Iptal"))
+            {
+                // İptal: User kendi teklifini iptal edebilir, Admin tüm teklifleri iptal edebilir
+                if (!isAdmin && (t.CreatedByUserId.HasValue && t.CreatedByUserId != uid))
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+                t.Durum = "Iptal";
+            }
+            else if (Allowed("Taslak", "Kabul", "SureDoldu"))
+            {
+                // Admin: Taslak durumundaki teklifi direkt Onayla veya Süresi Doldu yapabilir
+                if (!isAdmin) 
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+                t.Durum = next;
+            }
+            else if (Allowed("Taslak", "Gonderildi"))
+            {
+                // Gönder işlemi: User kendi teklifini gönderebilir, Admin tüm teklifleri gönderebilir
+                if (!isAdmin && (t.CreatedByUserId.HasValue && t.CreatedByUserId != uid))
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+                
+                if (t.Kalemler.Count == 0) return Results.BadRequest(new { error = "Gönderim için en az bir kalem gerekir" });
+                if (t.TeklfiTarihi == default) return Results.BadRequest(new { error = "Gönderim için teklif tarihi gerekir" });
+                t.Durum = "Gonderildi";
+            }
+            else if (Allowed("Gonderildi", "Kabul", "Red", "SureDoldu", "Iptal"))
+            {
+                // Gönderildi durumundan diğer durumlara geçiş: Sadece Admin
+                if (!isAdmin) 
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+                t.Durum = next;
+            }
+            else
+            {
+                return Results.Conflict(new { error = $"Geçersiz durum geçişi: {current} -> {next}" });
+            }
+
+            await db.SaveChangesAsync();
+            Audit.Log(db, nameof(Teklif), t.Id, "Durum Değişti", new { OncekiDurum = current }, new { YeniDurum = t.Durum }, uid);
+            await db.SaveChangesAsync();
+            await tr.CommitAsync();
+            return Results.Ok(new { t.Id, t.Durum });
         });
         g.MapPost("/{id:int}/kalemler", async (int id, AddKalemRequest req, AppDbContext db, HttpContext ctx) =>
         {

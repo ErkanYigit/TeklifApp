@@ -60,6 +60,11 @@ public class AppDbContext : DbContext
         // Teklif
         modelBuilder.Entity<Teklif>().HasIndex(x => x.No).IsUnique();
         modelBuilder.Entity<Teklif>().HasIndex(x => x.CreatedByUserId);
+        modelBuilder.Entity<Teklif>()
+            .HasOne(x => x.Cari)
+            .WithMany()
+            .HasForeignKey(x => x.CariId)
+            .OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<TeklifKalem>()
             .HasOne(x => x.Teklif)
             .WithMany(x => x.Kalemler)

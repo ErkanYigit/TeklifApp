@@ -4,6 +4,7 @@ using Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251107144850_AddCariStok")]
+    partial class AddCariStok
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -397,30 +400,10 @@ namespace Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("nvarchar(450)");
 
-                    b.Property<string>("OnayToken")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<DateTime?>("OnayTokenGecerlilik")
-                        .HasColumnType("datetime2");
-
-                    b.Property<DateTime?>("OnayZamani")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("OnaylayanAd")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("RedNotu")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<DateTime?>("RedZamani")
-                        .HasColumnType("datetime2");
-
                     b.Property<DateTime>("TeklfiTarihi")
                         .HasColumnType("datetime2");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("CariId");
 
                     b.HasIndex("CreatedByUserId");
 
@@ -634,17 +617,6 @@ namespace Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("Stok");
-                });
-
-            modelBuilder.Entity("Domain.Entities.Teklif", b =>
-                {
-                    b.HasOne("Domain.Entities.Cari", "Cari")
-                        .WithMany()
-                        .HasForeignKey("CariId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Cari");
                 });
 
             modelBuilder.Entity("Domain.Entities.TeklifKalem", b =>

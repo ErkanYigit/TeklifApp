@@ -4,7 +4,6 @@ public record CariDto(int Id, string Kod, string Ad, string VergiNo, string Verg
 public record CreateCariRequest(string Kod, string Ad, string VergiNo, string VergiDairesi, string Telefon, string Eposta);
 public record UpdateCariRequest(string Ad, string VergiNo, string VergiDairesi, string Telefon, string Eposta);
 
-
 public record AdresDto(int Id, int CariId, string Tur, string Ulke, string Il, string Ilce, string Satir1, string? Satir2, string? PostaKodu);
 public record CreateAdresRequest(string Tur, string Ulke, string Il, string Ilce, string Satir1, string? Satir2, string? PostaKodu);
 public record UpdateAdresRequest(string Tur, string Ulke, string Il, string Ilce, string Satir1, string? Satir2, string? PostaKodu);

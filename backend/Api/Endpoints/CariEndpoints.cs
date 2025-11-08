@@ -28,8 +28,11 @@ public static class CariEndpoints
         });
         g.MapGet("/{id:int}", async (int id, AppDbContext db) =>
         {
-            var cari = await db.Set<Cari>().Include(x => x.Adresler).FirstOrDefaultAsync(x => x.Id == id);
+            var cari = await db.Set<Cari>()
+                .Include(x => x.Adresler)
+                .FirstOrDefaultAsync(x => x.Id == id);
             if (cari is null) return Results.NotFound();
+
             return Results.Ok(new {
                 cari = new CariDto(cari.Id, cari.Kod, cari.Ad, cari.VergiNo, cari.VergiDairesi, cari.Telefon, cari.Eposta),
                 adresler = cari.Adresler.Select(x => new AdresDto(x.Id, x.CariId, x.Tur, x.Ulke, x.Il, x.Ilce, x.Satir1, x.Satir2, x.PostaKodu)).ToList()
@@ -102,6 +105,7 @@ public static class CariEndpoints
             db.Remove(c); await db.SaveChangesAsync();
             return Results.NoContent();
         });
+
         // adresler (alias: /adresler)
         g.MapGet("/{id:int}/adres", async (int id, AppDbContext db) =>
         {

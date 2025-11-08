@@ -89,6 +89,8 @@ app.MapGroup("/api").MapCari();
 
 app.MapGroup("/api").MapStok();
 
+app.MapGroup("/api").MapTedarikci();
+
 app.MapGroup("/api").MapTeklif();
 
 app.MapGroup("/api").MapSepet();

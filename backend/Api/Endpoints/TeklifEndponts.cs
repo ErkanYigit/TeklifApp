@@ -213,6 +213,86 @@ public static class TeklifEndpoints
             await tr.CommitAsync();
             return Results.NoContent();
         });
+
+        // Token üretme (müşteri onay linki)
+        g.MapPost("/{id:int}/share", async (int id, AppDbContext db, HttpContext ctx) =>
+        {
+            var t = await db.Set<Teklif>().FirstOrDefaultAsync(x => x.Id == id);
+            if (t is null) return Results.NotFound();
+            var uid = GetUserId(ctx);
+            var isAdmin = IsAdmin(ctx);
+            if (!isAdmin && (t.CreatedByUserId.HasValue && t.CreatedByUserId != uid))
+                return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+            var token = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32))
+                .Replace("+", "-").Replace("/", "_").Replace("=", "");
+            t.OnayToken = token;
+            t.OnayTokenGecerlilik = DateTime.UtcNow.AddDays(30);
+            await db.SaveChangesAsync();
+            return Results.Ok(new { token, expiresAt = t.OnayTokenGecerlilik });
+        });
+
+        // Token ile teklif görüntüleme (anonim - authorization gerektirmez)
+        var anonGroup = app.MapGroup("/teklif");
+        anonGroup.MapGet("/goruntule", async (string token, AppDbContext db) =>
+        {
+            var t = await db.Set<Teklif>()
+                .Include(x => x.Kalemler)
+                .Include(x => x.Cari)
+                .FirstOrDefaultAsync(x => x.OnayToken == token && x.OnayTokenGecerlilik.HasValue && x.OnayTokenGecerlilik.Value > DateTime.UtcNow);
+            if (t is null) return Results.NotFound(new { error = "Geçersiz veya süresi dolmuş token" });
+            var dto = new TeklifDto(t.Id, t.No, t.CariId, t.TeklfiTarihi, t.Durum, t.AraToplam, t.IskontoToplam, t.KdvToplam, t.GenelToplam);
+            var kalemler = t.Kalemler.Select(x => new KalemDto(x.Id, x.TeklifId, x.StokId, x.Miktar, x.BirimFiyat, x.IskontoOran, x.KdvOran, x.Tutar, x.IskontoTutar, x.KdvTutar, x.GenelTutar)).ToList();
+            return Results.Ok(new { 
+                teklif = dto, 
+                kalemler = kalemler,
+                cari = t.Cari != null ? new { ad = t.Cari.Ad, kod = t.Cari.Kod } : null,
+                onayZamani = t.OnayZamani,
+                redZamani = t.RedZamani
+            });
+        });
+
+        // Müşteri onay (anonim - authorization gerektirmez)
+        anonGroup.MapPost("/onayla", async (OnayRequest req, AppDbContext db) =>
+        {
+            var t = await db.Set<Teklif>().FirstOrDefaultAsync(x => x.OnayToken == req.Token && x.OnayTokenGecerlilik.HasValue && x.OnayTokenGecerlilik.Value > DateTime.UtcNow);
+            if (t is null) return Results.NotFound(new { error = "Geçersiz veya süresi dolmuş token" });
+            if (t.Durum != "Gonderildi") return Results.Conflict(new { error = "Bu teklif onay için uygun durumda değil" });
+            if (t.OnayZamani.HasValue) return Results.Conflict(new { error = "Bu teklif zaten onaylanmış" });
+
+            using var tr = await db.Database.BeginTransactionAsync();
+            t.Durum = "Kabul";
+            t.OnayZamani = DateTime.UtcNow;
+            t.OnaylayanAd = string.IsNullOrWhiteSpace(req.OnaylayanAd) ? null : req.OnaylayanAd.Trim();
+            t.OnayToken = null;
+            t.OnayTokenGecerlilik = null;
+            await db.SaveChangesAsync();
+            Audit.Log(db, nameof(Teklif), t.Id, "Müşteri Onayı", new { OncekiDurum = "Gonderildi" }, new { YeniDurum = "Kabul", OnaylayanAd = t.OnaylayanAd }, null);
+            await db.SaveChangesAsync();
+            await tr.CommitAsync();
+            return Results.Ok(new { teklifId = t.Id, durum = t.Durum });
+        });
+
+        // Müşteri ret (anonim - authorization gerektirmez)
+        anonGroup.MapPost("/reddet", async (RedRequest req, AppDbContext db) =>
+        {
+            var t = await db.Set<Teklif>().FirstOrDefaultAsync(x => x.OnayToken == req.Token && x.OnayTokenGecerlilik.HasValue && x.OnayTokenGecerlilik.Value > DateTime.UtcNow);
+            if (t is null) return Results.NotFound(new { error = "Geçersiz veya süresi dolmuş token" });
+            if (t.Durum != "Gonderildi") return Results.Conflict(new { error = "Bu teklif red için uygun durumda değil" });
+            if (t.RedZamani.HasValue) return Results.Conflict(new { error = "Bu teklif zaten reddedilmiş" });
+
+            using var tr = await db.Database.BeginTransactionAsync();
+            t.Durum = "Red";
+            t.RedZamani = DateTime.UtcNow;
+            t.RedNotu = string.IsNullOrWhiteSpace(req.RedNotu) ? null : req.RedNotu.Trim();
+            t.OnayToken = null;
+            t.OnayTokenGecerlilik = null;
+            await db.SaveChangesAsync();
+            Audit.Log(db, nameof(Teklif), t.Id, "Müşteri Reddi", new { OncekiDurum = "Gonderildi" }, new { YeniDurum = "Red", RedNotu = t.RedNotu }, null);
+            await db.SaveChangesAsync();
+            await tr.CommitAsync();
+            return Results.Ok(new { teklifId = t.Id, durum = t.Durum });
+        });
     }
 
     private static int? GetUserId(HttpContext ctx) 
@@ -226,3 +306,6 @@ public static class TeklifEndpoints
     private static bool IsEditable(Teklif t)
         => t.Durum == "Taslak" || t.Durum == "Revizyonda";
 }
+
+public record OnayRequest(string Token, string? OnaylayanAd);
+public record RedRequest(string Token, string? RedNotu);

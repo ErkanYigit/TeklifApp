@@ -12,5 +12,4 @@ public class Cari
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public int? CreatedByUserId { get; set; }
     public ICollection<CariAdres> Adresler { get; set; } = new List<CariAdres>();
-
 }

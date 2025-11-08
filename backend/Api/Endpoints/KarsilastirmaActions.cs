@@ -16,23 +16,23 @@ public static class KarsilastirmaActions
 
 
         // Seçilen satır(lar)ı sepete ekle
-        g.MapPost("/sepet", async (IEnumerable<TedarikciSatir> secilenler, AppDbContext db, HttpContext ctx) =>
+        g.MapPost("/sepet", async (IEnumerable<FiyatSatir> secilenler, AppDbContext db, HttpContext ctx) =>
         {
             var uid = GetUserId(ctx); if (uid is null) return Results.Unauthorized();
             var sepet = await db.Set<TeklifSepet>().FirstOrDefaultAsync(x => x.UserId == uid) ?? new TeklifSepet { UserId = uid.Value };
             if (sepet.Id == 0) db.Add(sepet);
             foreach (var s in secilenler)
-                db.Add(new TeklifSepetKalem { SepetId = sepet.Id, StokId = s.TedarikciId /* burada stokId gerekli ise modelinizi stokId ile gönderin */, Miktar = 1, HedefFiyat = s.Fiyat });
+                db.Add(new TeklifSepetKalem { SepetId = sepet.Id, StokId = s.StokId, Miktar = 1, HedefFiyat = s.Fiyat });
             await db.SaveChangesAsync();
             return Results.Ok();
         });
         // Doğrudan teklife kalem olarak ekle
-        g.MapPost("/teklif/{teklifId:int}", async (int teklifId, IEnumerable<TedarikciSatir> secilenler, AppDbContext db) =>
+        g.MapPost("/teklif/{teklifId:int}", async (int teklifId, IEnumerable<FiyatSatir> secilenler, AppDbContext db) =>
         {
             var t = await db.Set<Teklif>().Include(x => x.Kalemler).FirstOrDefaultAsync(x => x.Id == teklifId);
             if (t is null) return Results.NotFound();
             foreach (var s in secilenler)
-                db.Add(new TeklifKalem { TeklifId = teklifId, StokId = s.TedarikciId /* stokId gönderin */, Miktar = 1, BirimFiyat = s.Fiyat, IskontoOran = 0, KdvOran = 20 });
+                db.Add(new TeklifKalem { TeklifId = teklifId, StokId = s.StokId, Miktar = 1, BirimFiyat = s.Fiyat, IskontoOran = 0, KdvOran = 20 });
             await db.SaveChangesAsync();
             TeklifHesap.Hesapla(t); await db.SaveChangesAsync();
             return Results.Ok();

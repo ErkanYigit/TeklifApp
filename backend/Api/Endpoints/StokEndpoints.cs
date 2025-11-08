@@ -104,6 +104,59 @@ public static class StokEndpoints
             db.Remove(fiyat); await db.SaveChangesAsync();
             return Results.NoContent();
         }).RequireAuthorization("AdminOrPurchase");
+
+        // TedarikciFiyat endpoints
+        g.MapGet("/{id:int}/tedarikci-fiyatlar", async (int id, AppDbContext db) =>
+        {
+            if (!await db.Set<Stok>().AnyAsync(x => x.Id == id)) return Results.NotFound();
+            var items = await (from tf in db.Set<TedarikciFiyat>()
+                             join t in db.Set<Tedarikci>() on tf.TedarikciId equals t.Id
+                             where tf.StokId == id
+                             orderby tf.GuncellemeTarihi descending
+                             select new TedarikciFiyatDto(tf.Id, tf.StokId, tf.TedarikciId, t.Ad, tf.FiyatListeNo, tf.Fiyat, tf.ParaBirimi, tf.GuncellemeTarihi)).ToListAsync();
+            return Results.Ok(items);
+        });
+
+        g.MapPost("/{id:int}/tedarikci-fiyatlar", async (int id, CreateTedarikciFiyatRequest req, AppDbContext db) =>
+        {
+            if (!await db.Set<Stok>().AnyAsync(x => x.Id == id)) return Results.NotFound(new { error = "Stok bulunamadı" });
+            if (!await db.Set<Tedarikci>().AnyAsync(x => x.Id == req.TedarikciId)) return Results.NotFound(new { error = "Tedarikçi bulunamadı" });
+            var fiyat = new TedarikciFiyat
+            {
+                StokId = id,
+                TedarikciId = req.TedarikciId,
+                FiyatListeNo = req.FiyatListeNo,
+                Fiyat = req.Fiyat,
+                ParaBirimi = req.ParaBirimi ?? "TRY",
+                GuncellemeTarihi = req.GuncellemeTarihi ?? DateTime.UtcNow
+            };
+            db.Add(fiyat);
+            await db.SaveChangesAsync();
+            return Results.Created($"/stok/{id}/tedarikci-fiyatlar/{fiyat.Id}", new { fiyat.Id });
+        }).RequireAuthorization("AdminOrPurchase");
+
+        g.MapPut("/{id:int}/tedarikci-fiyatlar/{fid:int}", async (int id, int fid, UpdateTedarikciFiyatRequest req, AppDbContext db) =>
+        {
+            var fiyat = await db.Set<TedarikciFiyat>().FirstOrDefaultAsync(x => x.Id == fid && x.StokId == id);
+            if (fiyat is null) return Results.NotFound();
+            if (!await db.Set<Tedarikci>().AnyAsync(x => x.Id == req.TedarikciId)) return Results.NotFound(new { error = "Tedarikçi bulunamadı" });
+            fiyat.TedarikciId = req.TedarikciId;
+            fiyat.FiyatListeNo = req.FiyatListeNo;
+            fiyat.Fiyat = req.Fiyat;
+            fiyat.ParaBirimi = req.ParaBirimi ?? "TRY";
+            fiyat.GuncellemeTarihi = req.GuncellemeTarihi ?? DateTime.UtcNow;
+            await db.SaveChangesAsync();
+            return Results.NoContent();
+        }).RequireAuthorization("AdminOrPurchase");
+
+        g.MapDelete("/{id:int}/tedarikci-fiyatlar/{fid:int}", async (int id, int fid, AppDbContext db) =>
+        {
+            var fiyat = await db.Set<TedarikciFiyat>().FirstOrDefaultAsync(x => x.Id == fid && x.StokId == id);
+            if (fiyat is null) return Results.NotFound();
+            db.Remove(fiyat);
+            await db.SaveChangesAsync();
+            return Results.NoContent();
+        }).RequireAuthorization("AdminOrPurchase");
     }
 }
     
